@@ -14,7 +14,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 def default_data_path() -> Path:
     """Return the persistent per-user root for local LinkedIn MCP state."""
-
     return user_data_path("linkedin-mcp", appauthor=False)
 
 
@@ -44,17 +43,28 @@ class Settings(BaseSettings):
     )
 
     account_id: str = Field(default="personal", min_length=1, max_length=200)
-    browser_profile_path: Path = Field(default_factory=_default_browser_profile_path)
-    browser_cache_path: Path = Field(default_factory=_default_browser_cache_path)
+
+    browser_profile_path: Path = Field(
+        default_factory=_default_browser_profile_path
+    )
+
+    browser_cache_path: Path = Field(
+        default_factory=_default_browser_cache_path
+    )
+
     browser_auto_install: bool = True
     browser_install_timeout_seconds: float = Field(default=600, ge=30, le=1_800)
     auto_login_on_start: bool = True
-    asset_root_path: Path = Field(default_factory=_default_asset_root_path)
+
+    asset_root_path: Path = Field(
+        default_factory=_default_asset_root_path
+    )
 
     allowed_hosts: tuple[str, ...] = ("www.linkedin.com", "linkedin.com")
 
     queue_capacity: int = Field(default=100, ge=1, le=10_000)
     minimum_navigation_interval_seconds: float = Field(default=2.0, ge=0, le=120)
+
     job_search_max_pages_per_call: int = Field(default=100, ge=1, le=100)
     people_search_max_pages_per_call: int = Field(default=100, ge=1, le=100)
     profile_max_detail_pages_per_call: int = Field(default=20, ge=0, le=50)
@@ -64,10 +74,15 @@ class Settings(BaseSettings):
     invitations_max_scroll_rounds_per_call: int = Field(default=100, ge=1, le=500)
     connections_max_scroll_rounds_per_call: int = Field(default=100, ge=1, le=500)
     messaging_max_scroll_rounds_per_call: int = Field(default=100, ge=1, le=500)
+
     pagination_cursor_ttl_seconds: int = Field(default=900, ge=60, le=86_400)
     pagination_max_active_cursors: int = Field(default=64, ge=1, le=1_000)
     pagination_max_seen_items_per_cursor: int = Field(default=5_000, ge=100, le=50_000)
-    runtime_lock_path: Path = Field(default_factory=_default_runtime_lock_path)
+
+    runtime_lock_path: Path = Field(
+        default_factory=_default_runtime_lock_path
+    )
+
     runtime_start_timeout_seconds: float = Field(default=30.0, ge=1, le=300)
 
     browser_headless: bool = True
@@ -77,18 +92,46 @@ class Settings(BaseSettings):
     transport: Literal["stdio", "streamable-http"] = "stdio"
     http_host: str = "127.0.0.1"
     http_port: int = Field(default=8000, ge=1, le=65_535)
+
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+
+    @field_validator("account_id")
+    @classmethod
+    def validate_account_id(cls, value: str) -> str:
+        value = value.strip()
+
+        if not value:
+            raise ValueError("account_id cannot be empty")
+
+        if value in {".", ".."} or "/" in value or "\\" in value:
+            raise ValueError("account_id contains an unsafe path component")
+
+        return value
 
     @field_validator("allowed_hosts")
     @classmethod
     def validate_allowed_hosts(cls, hosts: tuple[str, ...]) -> tuple[str, ...]:
         normalized = tuple(host.strip().lower().rstrip(".") for host in hosts)
-        if not normalized or any(not host or "/" in host or ":" in host for host in normalized):
+
+        if not normalized or any(
+            not host or "/" in host or ":" in host for host in normalized
+        ):
             raise ValueError("allowed_hosts must contain bare DNS hostnames")
+
         return normalized
 
     @model_validator(mode="after")
     def validate_runtime_contract(self) -> Settings:
+        default_profile = _default_browser_profile_path()
+
+        if self.browser_profile_path == default_profile:
+            self.browser_profile_path = (
+                default_data_path()
+                / "accounts"
+                / self.account_id
+                / "profile"
+            )
+
         if self.transport == "streamable-http" and self.http_host not in {
             "127.0.0.1",
             "::1",
@@ -97,12 +140,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Unauthenticated Streamable HTTP is restricted to loopback in this release."
             )
+
         return self
 
 
 def runtime_configuration_fingerprint(settings: Settings) -> str:
     """Hash the effective shared-runtime policy without exposing local values."""
-
     values = settings.model_dump(mode="json")
     values["transport"] = "streamable-http"
     values.pop("runtime_start_timeout_seconds", None)
