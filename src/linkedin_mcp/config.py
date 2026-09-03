@@ -122,15 +122,19 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_runtime_contract(self) -> Settings:
-        default_profile = _default_browser_profile_path()
+        account_root = (
+            default_data_path()
+            / "accounts"
+            / self.account_id
+        )
 
+        default_profile = _default_browser_profile_path()
         if self.browser_profile_path == default_profile:
-            self.browser_profile_path = (
-                default_data_path()
-                / "accounts"
-                / self.account_id
-                / "profile"
-            )
+            self.browser_profile_path = account_root / "profile"
+
+        default_runtime_lock = _default_runtime_lock_path()
+        if self.runtime_lock_path == default_runtime_lock:
+            self.runtime_lock_path = account_root / "runtime.lock"
 
         if self.transport == "streamable-http" and self.http_host not in {
             "127.0.0.1",
