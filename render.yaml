@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: linkedin-mcp
+    runtime: docker
+    plan: starter
+    branch: company-multi-account
+    dockerfilePath: ./Dockerfile
+    dockerCommand: /app/start.sh
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: LINKEDIN_GATEWAY_APP_ENV
+        value: production
+
+      - key: LINKEDIN_GATEWAY_HOST
+        value: 0.0.0.0
+
+      - key: LINKEDIN_GATEWAY_DATA_DIR
+        value: /data
+
+      - key: LINKEDIN_GATEWAY_PUBLIC_BASE_URL
+        sync: false
+
+      - key: LINKEDIN_GATEWAY_OAUTH_ISSUER
+        sync: false
+
+      - key: LINKEDIN_GATEWAY_OAUTH_AUDIENCE
+        value: linkedin-mcp
+
+      - key: LINKEDIN_GATEWAY_OAUTH_SIGNING_SECRET
+        generateValue: true
+
+      - key: LINKEDIN_GATEWAY_ADMIN_EMAIL
+        sync: false
+
+    disk:
+      name: linkedin-mcp-data
+      mountPath: /data
+      sizeGB: 10

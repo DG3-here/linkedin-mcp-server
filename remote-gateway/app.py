@@ -17,7 +17,7 @@ from oauth import (
     protected_resource_metadata,
     token,
 )
-
+from runtime.manager import get_runtime_manager
 
 settings = get_settings()
 
@@ -33,22 +33,11 @@ async def health(request: Request):
 
 
 async def ready(request: Request):
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            response = await client.get(
-                settings.mcp_upstream_url.replace("/mcp", "/"),
-            )
-
-        upstream_ok = response.status_code < 500
-    except Exception:
-        upstream_ok = False
-
     return JSONResponse(
         {
-            "status": "ready" if upstream_ok else "degraded",
-            "upstream": upstream_ok,
-        },
-        status_code=200 if upstream_ok else 503,
+            "status": "ready",
+            "runtime_manager": True,
+        }
     )
 
 
@@ -70,14 +59,18 @@ async def mcp(request: Request):
 
     user_id = claims.get("sub")
 
-    if not user_id:
+    if not isinstance(user_id, str) or not user_id:
         return JSONResponse(
             {"error": "invalid_token"},
             status_code=401,
         )
 
-    # Identity is intentionally forwarded separately from the OAuth token.
-    # The upstream MCP must never receive the external bearer token.
+    runtime_manager = get_runtime_manager()
+
+    upstream_url = await runtime_manager.upstream_url(
+        user_id
+    )
+
     headers = {
         "content-type": request.headers.get(
             "content-type",
@@ -96,15 +89,18 @@ async def mcp(request: Request):
         "mcp-protocol-version",
     ):
         value = request.headers.get(name)
+
         if value:
             headers[name] = value
 
     body = await request.body()
 
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(
+        timeout=None
+    ) as client:
         upstream = await client.request(
             request.method,
-            settings.mcp_upstream_url,
+            upstream_url,
             content=body,
             headers=headers,
         )
@@ -118,6 +114,7 @@ async def mcp(request: Request):
         "mcp-protocol-version",
     ):
         value = upstream.headers.get(name)
+
         if value:
             response_headers[name] = value
 
@@ -140,15 +137,76 @@ async def oauth_user(request: Request):
     return JSONResponse(
         {
             "user_id": claims["sub"],
-            "scope": claims.get("scope", ""),
+            "scope": claims.get(
+                "scope",
+                "",
+            ),
         }
     )
 
 
-routes = [
-    Route("/health", health, methods=["GET"]),
-    Route("/ready", ready, methods=["GET"]),
+async def runtime_status(request: Request):
+    claims = authenticate_bearer(request)
 
+    if claims is None:
+        return JSONResponse(
+            {"error": "unauthorized"},
+            status_code=401,
+        )
+
+    user_id = claims.get("sub")
+
+    if not isinstance(user_id, str) or not user_id:
+        return JSONResponse(
+            {"error": "invalid_token"},
+            status_code=401,
+        )
+
+    runtime_manager = get_runtime_manager()
+
+    try:
+        account = runtime_manager.account_for_user(
+            user_id
+        )
+    except RuntimeError as exc:
+        return JSONResponse(
+            {"error": str(exc)},
+            status_code=404,
+        )
+
+    runtime = await runtime_manager.status_for_user(
+        user_id
+    )
+
+    return JSONResponse(
+        {
+            "user_id": user_id,
+            "account_id": account.account_id,
+            "email": account.email,
+            "linkedin_connected": (
+                account.linkedin_connected
+            ),
+            "runtime": runtime,
+        }
+    )
+
+
+async def shutdown():
+    manager = get_runtime_manager()
+    await manager.stop_all()
+
+
+routes = [
+    Route(
+        "/health",
+        health,
+        methods=["GET"],
+    ),
+    Route(
+        "/ready",
+        ready,
+        methods=["GET"],
+    ),
     Route(
         "/.well-known/oauth-protected-resource",
         protected_resource_metadata,
@@ -159,22 +217,43 @@ routes = [
         authorization_server_metadata,
         methods=["GET"],
     ),
-
-    Route("/oauth/authorize", authorize, methods=["GET"]),
+    Route(
+        "/oauth/authorize",
+        authorize,
+        methods=["GET"],
+    ),
     Route(
         "/oauth/authorize/approve",
         approve_authorization,
         methods=["POST"],
     ),
-    Route("/oauth/token", token, methods=["POST"]),
-
-    Route("/oauth/user", oauth_user, methods=["GET"]),
-
-    Route("/mcp", mcp, methods=["GET", "POST", "DELETE"]),
+    Route(
+        "/oauth/token",
+        token,
+        methods=["POST"],
+    ),
+    Route(
+        "/oauth/user",
+        oauth_user,
+        methods=["GET"],
+    ),
+    Route(
+        "/runtime/status",
+        runtime_status,
+        methods=["GET"],
+    ),
+    Route(
+        "/mcp",
+        mcp,
+        methods=["GET", "POST", "DELETE"],
+    ),
 ]
 
 
-app = Starlette(routes=routes)
+app = Starlette(
+    routes=routes,
+    on_shutdown=[shutdown],
+)
 
 
 if __name__ == "__main__":
@@ -183,5 +262,10 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host=settings.host,
-        port=int(os.environ.get("PORT", settings.port)),
+        port=int(
+            os.environ.get(
+                "PORT",
+                settings.port,
+            )
+        ),
     )
