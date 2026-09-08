@@ -44,14 +44,14 @@ def test_local_paths_default_to_persistent_platform_locations(
     settings = Settings()
     data_path = default_data_path()
 
-    assert settings.browser_profile_path == data_path / "profile"
+    assert settings.browser_profile_path == data_path / "accounts" / "personal" / "profile"
     assert settings.browser_cache_path == user_cache_path(
         "ms-playwright",
         appauthor=False,
         opinion=False,
     )
     assert settings.asset_root_path == data_path / "assets"
-    assert settings.runtime_lock_path == data_path / "runtime.lock"
+    assert settings.runtime_lock_path == data_path / "accounts" / "personal" / "runtime.lock"
 
 
 def test_local_queue_and_internal_search_bound_are_validated() -> None:

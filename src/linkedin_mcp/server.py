@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Awaitable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -13,6 +13,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from linkedin_mcp import __version__
+from linkedin_mcp.accounts import AccountSummary
 from linkedin_mcp.application import bind_client_execution
 from linkedin_mcp.application.executor import safe_capability_error
 from linkedin_mcp.container import AppContainer
@@ -209,6 +210,9 @@ def create_mcp_server(
         annotations=local_read,
     )
     async def _session_status() -> SessionStatusOutput:
+        account: AccountSummary | None = None
+        with suppress(Exception):
+            account = container.account_manager.get(container.settings.account_id)
         return SessionStatusOutput(
             account_id=container.settings.account_id,
             profile_present=container.browser.profile_present(),
@@ -220,6 +224,10 @@ def create_mcp_server(
             paused=container.browser.paused,
             pause_reason=container.browser.pause_reason,
             status_message=container.browser.authentication_status_message,
+            account_label=account.label if account else None,
+            account_created_at=account.created_at if account else None,
+            account_last_authenticated_at=account.last_authenticated_at if account else None,
+            account_last_used_at=account.last_used_at if account else None,
         )
 
     @mcp.tool(

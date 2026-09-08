@@ -16,6 +16,7 @@ from mcp.types import TextResourceContents
 from pydantic import AnyUrl, HttpUrl
 
 from linkedin_mcp import __version__
+from linkedin_mcp.accounts import AccountRegistryStore, LinkedInAccountManager
 from linkedin_mcp.application import (
     AccountProcessLock,
     CapabilityExecutor,
@@ -695,6 +696,9 @@ def protocol_container(root: Path) -> AppContainer:
         account_id=settings.account_id,
         call_lookup=repository.find_call,
     )
+    account_manager = LinkedInAccountManager(
+        store=AccountRegistryStore(root / "account-registry.json")
+    )
     return AppContainer(
         settings=settings,
         registry=registry,
@@ -703,6 +707,7 @@ def protocol_container(root: Path) -> AppContainer:
         executor=executor,
         worker=worker,
         process_lock=AccountProcessLock(settings.runtime_lock_path),
+        account_manager=account_manager,
     )
 
 

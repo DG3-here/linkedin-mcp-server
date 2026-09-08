@@ -13,6 +13,7 @@ from types import ModuleType
 import pytest
 
 import linkedin_mcp.application.process_lock as process_lock_module
+import linkedin_mcp.config as config_module
 from linkedin_mcp.application import (
     AccountProcessLock,
     AccountRuntimeOwner,
@@ -51,6 +52,26 @@ async def test_production_container_composes_and_closes_without_connecting() -> 
     assert container.registry.get(CapabilityName.MESSAGING_SEARCH).version == "3.0.0"
     assert container.registry.get(CapabilityName.MESSAGING_SEND).version == "3.0.0"
     assert container.browser.started is False
+
+    await container.close()
+
+
+@pytest.mark.asyncio
+async def test_container_records_account_activity_on_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_user_data_path(*_args: object, **_kwargs: object) -> Path:
+        return tmp_path
+
+    monkeypatch.setattr(config_module, "user_data_path", fake_user_data_path)
+    container = create_production_container(Settings(account_id="recruiter_001"))
+
+    container._record_account_activity()  # pyright: ignore[reportPrivateUsage]
+
+    summary = container.account_manager.get("recruiter_001")
+    assert summary.registered is True
+    assert summary.last_used_at is not None
 
     await container.close()
 

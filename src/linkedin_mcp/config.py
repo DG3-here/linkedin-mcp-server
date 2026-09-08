@@ -33,6 +33,29 @@ def _default_runtime_lock_path() -> Path:
     return default_data_path() / "runtime.lock"
 
 
+def validate_account_id_value(value: str) -> str:
+    """Validate a candidate `account_id` before it is used to derive local paths."""
+    value = value.strip()
+
+    if not value:
+        raise ValueError("account_id cannot be empty")
+
+    if value in {".", ".."} or "/" in value or "\\" in value:
+        raise ValueError("account_id contains an unsafe path component")
+
+    return value
+
+
+def accounts_root_path() -> Path:
+    """Return the shared root directory containing every local account's state."""
+    return default_data_path() / "accounts"
+
+
+def account_root_path(account_id: str) -> Path:
+    """Return the persistent per-account root directory for `account_id`."""
+    return accounts_root_path() / account_id
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="LINKEDIN_MCP_",
@@ -98,15 +121,7 @@ class Settings(BaseSettings):
     @field_validator("account_id")
     @classmethod
     def validate_account_id(cls, value: str) -> str:
-        value = value.strip()
-
-        if not value:
-            raise ValueError("account_id cannot be empty")
-
-        if value in {".", ".."} or "/" in value or "\\" in value:
-            raise ValueError("account_id contains an unsafe path component")
-
-        return value
+        return validate_account_id_value(value)
 
     @field_validator("allowed_hosts")
     @classmethod
@@ -122,11 +137,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_runtime_contract(self) -> Settings:
-        account_root = (
-            default_data_path()
-            / "accounts"
-            / self.account_id
-        )
+        account_root = account_root_path(self.account_id)
 
         default_profile = _default_browser_profile_path()
         if self.browser_profile_path == default_profile:

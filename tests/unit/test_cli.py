@@ -11,6 +11,8 @@ import pytest
 from pydantic import ValidationError
 
 import linkedin_mcp.__main__ as cli
+import linkedin_mcp.config as config_module
+from linkedin_mcp.accounts import LinkedInAccountManager
 from linkedin_mcp.application import (
     AccountProcessLock,
     AccountRuntimeOwner,
@@ -675,3 +677,149 @@ async def test_hidden_runtime_revalidates_loopback_transport() -> None:
 
     with pytest.raises(ValidationError, match="restricted to loopback"):
         await cli._run_internal_runtime(settings)  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.fixture
+def account_data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    root = tmp_path / "data"
+
+    def fake_user_data_path(*_args: object, **_kwargs: object) -> Path:
+        return root
+
+    monkeypatch.setattr(config_module, "user_data_path", fake_user_data_path)
+    return root
+
+
+def test_account_parser_recognizes_every_subcommand() -> None:
+    assert cli.parser().parse_args(["account", "list"]).account_command == "list"
+
+    connect = cli.parser().parse_args(
+        ["account", "connect", "recruiter_001", "--label", "Recruiter One"]
+    )
+    assert connect.account_command == "connect"
+    assert connect.account_id == "recruiter_001"
+    assert connect.label == "Recruiter One"
+
+    status = cli.parser().parse_args(["account", "status", "recruiter_001"])
+    assert status.account_command == "status"
+    assert status.account_id == "recruiter_001"
+
+    forget = cli.parser().parse_args(["account", "forget", "recruiter_001", "--yes"])
+    assert forget.account_command == "forget"
+    assert forget.yes is True
+
+
+@pytest.mark.asyncio
+async def test_account_connect_registers_and_marks_authenticated(
+    account_data_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    login_settings: list[Settings] = []
+
+    async def fake_login(settings: Settings) -> None:
+        login_settings.append(settings)
+
+    monkeypatch.setattr(cli, "login_interactively", fake_login)
+
+    await cli._account_connect(  # pyright: ignore[reportPrivateUsage]
+        "recruiter_001", label="Recruiter One"
+    )
+    report = json.loads(capsys.readouterr().out)
+
+    assert len(login_settings) == 1
+    assert login_settings[0].account_id == "recruiter_001"
+    assert report["account_id"] == "recruiter_001"
+    assert report["label"] == "Recruiter One"
+    assert report["status"] == "authenticated"
+    assert report["last_authenticated_at"] is not None
+
+
+def test_account_list_reports_every_known_account(
+    account_data_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    LinkedInAccountManager().register("recruiter_001", label="Recruiter One")
+    LinkedInAccountManager().register("recruiter_002")
+
+    cli._account_list()  # pyright: ignore[reportPrivateUsage]
+    accounts = {entry["account_id"]: entry for entry in json.loads(capsys.readouterr().out)}
+
+    assert set(accounts) == {"recruiter_001", "recruiter_002"}
+    assert accounts["recruiter_001"]["label"] == "Recruiter One"
+
+
+def test_account_status_reports_an_unknown_account_clearly(
+    account_data_root: Path,
+) -> None:
+    with pytest.raises(ConfigurationError, match="has not been connected"):
+        cli._account_status("ghost")  # pyright: ignore[reportPrivateUsage]
+
+
+def test_account_forget_requires_confirmation_or_the_yes_flag(
+    account_data_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    LinkedInAccountManager().register("recruiter_001")
+
+    class NonInteractiveInput:
+        @staticmethod
+        def isatty() -> bool:
+            return False
+
+    monkeypatch.setattr(sys, "stdin", cast(Any, NonInteractiveInput()))
+    with pytest.raises(ValueError, match="interactive terminal"):
+        cli._account_forget(  # pyright: ignore[reportPrivateUsage]
+            "recruiter_001", confirmed=False
+        )
+
+    cli._account_forget("recruiter_001", confirmed=True)  # pyright: ignore[reportPrivateUsage]
+    report = json.loads(capsys.readouterr().out)
+    assert report == {"account_id": "recruiter_001", "removed": True}
+
+
+def test_main_dispatches_account_subcommands(
+    account_data_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def fake_list() -> None:
+        calls.append(("list", ()))
+
+    async def fake_connect(account_id: str, *, label: str | None) -> None:
+        calls.append(("connect", (account_id, label)))
+
+    def fake_status(account_id: str) -> None:
+        calls.append(("status", (account_id,)))
+
+    def fake_forget(account_id: str, *, confirmed: bool) -> None:
+        calls.append(("forget", (account_id, confirmed)))
+
+    monkeypatch.setattr(cli, "_account_list", fake_list)
+    monkeypatch.setattr(cli, "_account_connect", fake_connect)
+    monkeypatch.setattr(cli, "_account_status", fake_status)
+    monkeypatch.setattr(cli, "_account_forget", fake_forget)
+
+    monkeypatch.setattr(sys, "argv", ["linkedin-mcp", "account", "list"])
+    cli.main()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["linkedin-mcp", "account", "connect", "recruiter_001", "--label", "Label"],
+    )
+    cli.main()
+    monkeypatch.setattr(sys, "argv", ["linkedin-mcp", "account", "status", "recruiter_001"])
+    cli.main()
+    monkeypatch.setattr(
+        sys, "argv", ["linkedin-mcp", "account", "forget", "recruiter_001", "--yes"]
+    )
+    cli.main()
+
+    assert calls == [
+        ("list", ()),
+        ("connect", ("recruiter_001", "Label")),
+        ("status", ("recruiter_001",)),
+        ("forget", ("recruiter_001", True)),
+    ]

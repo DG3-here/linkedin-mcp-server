@@ -110,8 +110,14 @@ All application state is memory-only:
 - terminal action observations.
 
 Restarting the shared runtime clears that state. The Chromium profile is the
-only persistent server-owned state and contains LinkedIn authentication data.
-It must be treated as sensitive.
+only persistent server-owned state that contains LinkedIn authentication data,
+and must be treated as sensitive.
+
+A second, much smaller piece of persistent state exists purely for local
+account bookkeeping: a non-secret JSON registry (label, timestamps) tracked by
+`LinkedInAccountManager`. It never contains credentials, cookies, or session
+tokens. See [backend-architecture.md](backend-architecture.md) and
+[account-management.md](account-management.md).
 
 ## Scheduling and pacing
 

@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from typing import cast
 
+from linkedin_mcp.accounts import AccountRegistryStore, LinkedInAccountManager
 from linkedin_mcp.application import (
     AccountProcessLock,
     CapabilityExecutor,
@@ -76,6 +77,9 @@ def create_simulator_container(
         conversation=cast(ConversationProvider, network),
     )
     worker = CapabilityWorker(executor, queue_capacity=settings.queue_capacity)
+    account_manager = LinkedInAccountManager(
+        store=AccountRegistryStore(root / f"account-registry-{suffix}.json")
+    )
     return AppContainer(
         settings=settings,
         registry=registry,
@@ -84,4 +88,5 @@ def create_simulator_container(
         executor=executor,
         worker=worker,
         process_lock=AccountProcessLock(settings.runtime_lock_path),
+        account_manager=account_manager,
     )

@@ -3252,3 +3252,7 @@ class SessionStatusOutput(StrictModel):
     paused: bool
     pause_reason: str | None = None
     status_message: str | None = None
+    account_label: str | None = None
+    account_created_at: datetime | None = None
+    account_last_authenticated_at: datetime | None = None
+    account_last_used_at: datetime | None = None

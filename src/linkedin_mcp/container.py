@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 
 from linkedin_mcp import __version__
+from linkedin_mcp.accounts import LinkedInAccountManager
 from linkedin_mcp.application import (
     AccountProcessLock,
     CapabilityExecutor,
@@ -47,6 +49,7 @@ class AppContainer:
     worker: CapabilityWorker
     process_lock: AccountProcessLock
     clients: ClientSessionRegistry = field(default_factory=ClientSessionRegistry)
+    account_manager: LinkedInAccountManager = field(default_factory=LinkedInAccountManager)
     _started: bool = field(default=False, init=False)
 
     async def start(self) -> None:
@@ -56,10 +59,17 @@ class AppContainer:
         try:
             await self.worker.start()
             self.browser.start_session_bootstrap()
+            self._record_account_activity()
         except BaseException:
             self.process_lock.release()
             raise
         self._started = True
+
+    def _record_account_activity(self) -> None:
+        """Best-effort account-registry bookkeeping; never blocks server startup."""
+        with suppress(Exception):
+            self.account_manager.register(self.settings.account_id)
+            self.account_manager.record_used(self.settings.account_id)
 
     async def close(self) -> None:
         try:

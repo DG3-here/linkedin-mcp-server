@@ -14,6 +14,7 @@ from typing import cast
 
 from pydantic import ValidationError
 
+from linkedin_mcp.accounts import LinkedInAccountManager
 from linkedin_mcp.application import (
     AccountProcessLock,
     inspect_account_runtime,
@@ -76,6 +77,34 @@ def parser() -> argparse.ArgumentParser:
         help="Seconds to wait for graceful shutdown (default: 30)",
     )
     commands.add_parser("_runtime", help=argparse.SUPPRESS)
+
+    account = commands.add_parser("account", help="Manage locally configured LinkedIn accounts")
+    account_commands = account.add_subparsers(dest="account_command", required=True)
+    account_commands.add_parser("list", help="List every locally configured LinkedIn account")
+    account_connect = account_commands.add_parser(
+        "connect",
+        help="Register an account and open LinkedIn login for its persistent profile",
+    )
+    account_connect.add_argument("account_id")
+    account_connect.add_argument(
+        "--label",
+        default=None,
+        help="Optional human-readable recruiter/owner label",
+    )
+    account_status = account_commands.add_parser(
+        "status", help="Show one account's non-secret registry and runtime status"
+    )
+    account_status.add_argument("account_id")
+    account_forget = account_commands.add_parser(
+        "forget",
+        help="Remove an account from the registry (its profile and lock files are kept)",
+    )
+    account_forget.add_argument("account_id")
+    account_forget.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm forgetting the exact named account without an interactive prompt",
+    )
     return root
 
 
@@ -344,6 +373,68 @@ def _stop(settings: Settings, *, timeout_seconds: float) -> None:
     )
 
 
+def _account_list() -> None:
+    manager = LinkedInAccountManager()
+    summaries = manager.list()
+    print(
+        json.dumps(
+            [json.loads(summary.model_dump_json()) for summary in summaries],
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def _account_status(account_id: str) -> None:
+    manager = LinkedInAccountManager()
+    summary = manager.get(account_id)
+    print(json.dumps(json.loads(summary.model_dump_json()), indent=2, sort_keys=True))
+
+
+async def _account_connect(account_id: str, *, label: str | None) -> None:
+    manager = LinkedInAccountManager()
+    manager.register(account_id, label=label)
+    settings = manager.settings_for(account_id)
+    await _run_owned_operation(
+        settings,
+        command="account-connect",
+        operation=lambda: login_interactively(settings),
+    )
+    record = manager.record_authenticated(account_id)
+    payload = json.loads(record.model_dump_json())
+    payload["status"] = "authenticated"
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _confirm_account_forget(account_id: str) -> None:
+    if not sys.stdin.isatty():
+        raise ValueError(
+            "Forgetting an account requires an interactive terminal or the explicit "
+            "`--yes` option."
+        )
+    expected = "FORGET"
+    response = input(
+        f"Remove account '{account_id}' from the local registry? Its browser profile "
+        f"and runtime lock file are kept on disk. Type {expected} to continue: "
+    )
+    if response != expected:
+        raise ValueError("Account forget was cancelled.")
+
+
+def _account_forget(account_id: str, *, confirmed: bool) -> None:
+    if not confirmed:
+        _confirm_account_forget(account_id)
+    manager = LinkedInAccountManager()
+    removed = manager.forget(account_id)
+    print(
+        json.dumps(
+            {"account_id": account_id, "removed": removed},
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 async def _wait_for_stop_signal() -> signal.Signals:
     """Wait for a console stop signal using APIs available on every supported OS."""
 
@@ -461,6 +552,29 @@ def main() -> None:
         if arguments.command == "_runtime":
             asyncio.run(_run_internal_runtime(settings))
             return
+        if arguments.command == "account":
+            account_command = cast(str, arguments.account_command)
+            if account_command == "list":
+                _account_list()
+                return
+            if account_command == "connect":
+                asyncio.run(
+                    _account_connect(
+                        cast(str, arguments.account_id),
+                        label=cast("str | None", arguments.label),
+                    )
+                )
+                return
+            if account_command == "status":
+                _account_status(cast(str, arguments.account_id))
+                return
+            if account_command == "forget":
+                _account_forget(
+                    cast(str, arguments.account_id),
+                    confirmed=cast(bool, arguments.yes),
+                )
+                return
+            raise RuntimeError("Unknown account command")
         raise RuntimeError("Unknown command")
     except (LinkedInMCPError, ValidationError, ValueError, RuntimeError) as error:
         print(f"linkedin-mcp: {error}", file=sys.stderr)
